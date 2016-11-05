@@ -23,6 +23,12 @@ struct Simple {
     ZSTR_LEN(ret) = snprintf(ZSTR_VAL(ret), maxlen, "%ld", (long)counter);
     return ret;
   }
+
+  int compare(zend_long that) const {
+    return counter == that ? 0 : ((counter < that) ? -1 : 1);
+  }
+  int compare(const Simple& that) const { return compare(that.counter); }
+
  private:
   zend_long counter{0};
 };

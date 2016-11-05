@@ -33,6 +33,20 @@
  *    (object)$foo - No proto required, jsut returns $foo unmodified
  *    (resource)$foo - Throws exception
  *
+ *  PHP comparisons will be mapped to the polymorphic compare() method(s)
+ *  which should return -1, 0, or 1 consistent with the spaceship operator.
+ *  First, attempt to call a type-specific compare function:
+ *    $foo <=> true - int compare(bool) const;
+ *    $foo <=> 1 - int compare(zend_long) const;
+ *    $foo <=> 1.2 - int compare(double) const;
+ *    $foo <=> "hello" - int compare(const zend_string*) const;
+ *    $foo <=> [1,2,3] - int compare(const zend_array*) const;
+ *    $foo <=> $foo2 - int compare(const Foo&) const;
+ *    $foo <=> $bar - int compare(const zend_object*) const;
+ *    $foo <=> $resource - int compare(const zend_resource*) const;
+ *  If a specific comparator is not found, a generic fallback will be attempted:
+ *    $foo <=> $whatever - int compare(const zval*) const;
+ *
  *  Additionally, methods on the class may be invoked directly from PHP
  *  by usage of three macros:
  *
@@ -138,6 +152,7 @@ P3_CREATE_HAS_MEMBER_FN_TRAITS(hasToLong, toLong);
 P3_CREATE_HAS_MEMBER_FN_TRAITS(hasToDouble, toDouble);
 P3_CREATE_HAS_MEMBER_FN_TRAITS(hasToString, toString);
 P3_CREATE_HAS_MEMBER_FN_TRAITS(hasToArray, toArray);
+P3_CREATE_HAS_MEMBER_FN_TRAITS(hasCompare, compare);
 
 #define P3_CREATE_CAST_WRAPPER(ptype, ctype, zwrap) \
 template<class T> typename \
@@ -156,6 +171,42 @@ P3_CREATE_CAST_WRAPPER(Double, double, ZVAL_DOUBLE)
 P3_CREATE_CAST_WRAPPER(String, zend_string*, ZVAL_STR)
 P3_CREATE_CAST_WRAPPER(Array, zend_array*, ZVAL_ARR)
 
+template<class T> typename
+  std::enable_if<hasCompare<T, int() const>::value, int>::type \
+compareObjectToNull(zval *ret, T *a) {
+  ZVAL_LONG(ret, a->compare());
+  return SUCCESS;
+}
+template<class T> typename
+  std::enable_if<!hasCompare<T, int() const>::value, int>::type \
+compareObjectToNull(zval *ret, T *a) {
+  return FAILURE;
+}
+
+#define P3_CREATE_COMPARE_WRAPPER(ptype, ctype) \
+template<class T> typename \
+  std::enable_if<hasCompare<T, int(ctype) const>::value, int>::type \
+compareObjectTo##ptype(zval *ret, const T *a, ctype b) { \
+  ZVAL_LONG(ret, a->compare(b)); \
+  return SUCCESS; \
+} \
+template<class T> typename \
+  std::enable_if<!hasCompare<T, int(ctype) const>::value, int>::type \
+compareObjectTo##ptype(zval *ret, const T *a, ctype b) { \
+  return FAILURE; \
+}
+
+P3_CREATE_COMPARE_WRAPPER(Bool, bool)
+P3_CREATE_COMPARE_WRAPPER(Long, zend_long)
+P3_CREATE_COMPARE_WRAPPER(Double, double)
+P3_CREATE_COMPARE_WRAPPER(String, const zend_string*)
+P3_CREATE_COMPARE_WRAPPER(Array, const zend_array*)
+P3_CREATE_COMPARE_WRAPPER(Object, const zend_object*)
+P3_CREATE_COMPARE_WRAPPER(Similar, const T&)
+P3_CREATE_COMPARE_WRAPPER(Resource, const zend_resource*)
+P3_CREATE_COMPARE_WRAPPER(Zval, const zval*)
+
+#undef P3_CREATE_COMPARE_WRAPPER
 #undef P3_CREATE_CAST_WRAPPER
 #undef P3_CREATE_HAS_MEMBER_FN_TRAITS
 #undef P3_CREATE_HAS_MEMBER_FN_TRAITS_IMPL
@@ -215,6 +266,67 @@ int castObject(zval *src, zval *dest, int type) {
   }
 }
 
+// In theory, handlers are as unique as class entry
+// Let's hope that assumption holds.
+// Otherwise we might have to store T::class_entry
+template<class T>
+int compareObject(zval *rv, zval *a, zval *b) {
+  if ((Z_TYPE_P(a) != IS_OBJECT) || (Z_OBJ_P(a)->handlers != &T::handlers)) {
+    // Invert if needed so that 'a' is always a T
+    ZEND_ASSERT(Z_TYPE_P(b) == IS_OBJECT);
+    ZEND_ASSERT(Z_OBJ_P(b)->handlers == &T::handlers);
+    auto ret = compareObject<T>(rv, b, a);
+    if ((ret == SUCCESS) && (Z_TYPE_P(rv) == IS_LONG)) {
+      ZVAL_LONG(rv, -Z_LVAL_P(rv));
+    }
+    return ret;
+  }
+  auto obj = toObject<T>(a);
+  int ret = FAILURE;
+  switch (Z_TYPE_P(b)) {
+    case IS_UNDEF:
+    case IS_NULL:
+      ret = detail::compareObjectToNull<T>(rv, obj);
+      break;
+    case IS_TRUE:
+      ret = detail::compareObjectToBool<T>(rv, obj, true);
+      break;
+    case IS_FALSE:
+      ret = detail::compareObjectToBool<T>(rv, obj, false);
+      break;
+    case IS_LONG:
+      ret = detail::compareObjectToLong<T>(rv, obj, Z_LVAL_P(b));
+      break;
+    case IS_DOUBLE:
+      ret = detail::compareObjectToDouble<T>(rv, obj, Z_DVAL_P(b));
+      break;
+    case IS_STRING:
+      ret = detail::compareObjectToString<T>(rv, obj, Z_STR_P(b));
+      break;
+    case IS_ARRAY:
+      ret = detail::compareObjectToArray<T>(rv, obj, Z_ARR_P(b));
+      break;
+    case IS_OBJECT:
+      if (Z_OBJ_P(b)->handlers == &T::handlers) {
+        ret = detail::compareObjectToSimilar<T>(rv, obj, *toObject<T>(b));
+      } else {
+        ret = detail::compareObjectToObject<T>(rv, obj, Z_OBJ_P(b));
+      }
+      break;
+    case IS_RESOURCE:
+      ret = detail::compareObjectToResource<T>(rv, obj, Z_RES_P(b));
+      break;
+  }
+  if (ret == FAILURE) {
+    ret = detail::compareObjectToZval<T>(rv, obj, b);
+  }
+  if (ret == FAILURE) {
+    // ZE will crash if rv isn't initialized, even in FAILURE mode
+    ZVAL_LONG(rv, 0);
+  }
+  return ret;
+}
+
 // These templates never actually get called,
 // they just exist to satisfy expansion from initClassEntry
 template<class T> typename
@@ -258,6 +370,7 @@ zend_class_entry* initClassEntry(
   T::handlers.clone_obj = std::is_constructible<T,const T&>::value
     ? cloneObject<T> : nullptr;
   T::handlers.cast_object = castObject<T>;
+  T::handlers.compare = compareObject<T>;
 
   return pce;
 }
