@@ -5,14 +5,26 @@
 #include "php.h"
 #include "../p3.h"
 
+#include <math.h>
+
 struct Simple {
   P3_METHOD_DECLARE(takeANumber) {
     RETURN_LONG(++counter);
   }
 
   static zend_object_handlers handlers;
+
+  bool toBool() const { return counter; }
+  zend_long toLong() const { return counter; }
+  double toDouble() const { return counter; }
+  zend_string* toString() const {
+    constexpr int maxlen = 2 + ceil(log(ZEND_LONG_MAX) / log(10));
+    zend_string *ret = zend_string_alloc(maxlen, 0);
+    ZSTR_LEN(ret) = snprintf(ZSTR_VAL(ret), maxlen, "%ld", (long)counter);
+    return ret;
+  }
  private:
-  int counter{0};
+  zend_long counter{0};
 };
 zend_class_entry *php_simple_ce;
 zend_object_handlers Simple::handlers;
