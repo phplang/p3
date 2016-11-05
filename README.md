@@ -19,5 +19,4 @@ Otherwise, the key items to note are `PHP_REQUIRE_CXX()` and `-std=c++11` in `co
 
   * dim/obj read/write/isset/unset accessors
   * Wrapped property access (short-hand for above)
-  * Comparator support (e.g. operator< operator> operator==)
 
