@@ -15,7 +15,7 @@
  *  };
  *
  *  The class may be wrapped with all basic handlers and hooks defined
- *  by invocing p3::initClassEntry() from MINIT
+ *  by invoking p3::initClassEntry() from MINIT
  *
  *  PHP_MINIT_FUNCTION(myext) {
  *    php_myext_ce = p3::initClassEntry<Foo>("Foo", foo_methods);
