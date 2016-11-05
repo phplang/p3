@@ -123,6 +123,101 @@ T* toObject(zval *obj) {
 /////////////////////////////////////////////////////////////////////////////
 
 namespace detail {
+template<zend_uchar> struct phpType {};
+template<typename> struct cppType {};
+template<> struct phpType<IS_UNDEF> {
+  typedef void type;
+  typedef void const_type;
+  static type get(zval *pzv) { ZEND_ASSERT(Z_TYPE_P(pzv) == IS_UNDEF); }
+  static void make(zval *pzv) { ZVAL_UNDEF(pzv); }
+};
+template<> struct phpType<IS_NULL> {
+  typedef void type;
+  typedef void const_type;
+  static type get(zval *pzv) { ZEND_ASSERT(Z_TYPE_P(pzv) == IS_NULL); }
+  static void make(zval *pzv) { ZVAL_NULL(pzv); }
+};
+template<> struct cppType<void> { const zend_uchar type = IS_NULL; };
+template<> struct phpType<_IS_BOOL> {
+  typedef zend_bool type;
+  typedef zend_bool const_type;
+  static type get(zval *pzv) {
+    ZEND_ASSERT((Z_TYPE_P(pzv) == IS_TRUE) || (Z_TYPE_P(pzv) == IS_FALSE));
+    return Z_TYPE_P(pzv) == IS_TRUE;
+  }
+  static void make(zval *pzv, type bval) { ZVAL_BOOL(pzv, bval); }
+};
+template<> struct cppType<zend_bool> { const zend_uchar type = _IS_BOOL; };
+template<> struct phpType<IS_TRUE> {
+  typedef zend_bool type;
+  typedef zend_bool const_type;
+  static type get(zval *pzv) {
+    ZEND_ASSERT(Z_TYPE_P(pzv) == IS_TRUE);
+    return true;
+  }
+  static void make(zval *pzv) { ZVAL_TRUE(pzv); }
+};
+template<> struct phpType<IS_FALSE> {
+  typedef zend_bool type;
+  typedef zend_bool const_type;
+  static type get(zval *pzv) {
+    ZEND_ASSERT(Z_TYPE_P(pzv) == IS_FALSE);
+    return false;
+  }
+  static void make(zval *pzv) { ZVAL_FALSE(pzv); }
+};
+template<> struct phpType<IS_LONG> {
+  typedef zend_long type;
+  typedef zend_long const_type;
+  static type get(zval *pzv) {
+    ZEND_ASSERT(Z_TYPE_P(pzv) == IS_LONG);
+    return Z_LVAL_P(pzv);
+  }
+  static void make(zval *pzv, type val) { ZVAL_LONG(pzv, val); }
+};
+template<> struct cppType<zend_long> { const zend_uchar type = IS_LONG; };
+template<> struct phpType<IS_DOUBLE> {
+  typedef double type;
+  typedef double const_type;
+  static type get(zval *pzv) {
+    ZEND_ASSERT(Z_TYPE_P(pzv) == IS_DOUBLE);
+    return Z_DVAL_P(pzv);
+  }
+  static void make(zval *pzv, type val) { ZVAL_DOUBLE(pzv, val); }
+};
+template<> struct cppType<double> { const zend_uchar type = IS_DOUBLE; };
+#define P3_DECLARE_GCTYPE_DETAIL(dt, ctype, wrap, unwrap) \
+template<> struct phpType<dt> { \
+  typedef ctype type; \
+  typedef const ctype const_type; \
+  static type get(zval *pzv) { \
+    ZEND_ASSERT(Z_TYPE_P(pzv) == dt); \
+    return unwrap(pzv); \
+  } \
+  static void make(zval *pzv, type val, bool cpy = true) { \
+    wrap(pzv, val); \
+    if (cpy) zval_addref_p(pzv); \
+  } \
+}; \
+template<> struct cppType<ctype> { const zend_uchar type = dt; }; \
+template<> struct cppType<const ctype> { const zend_uchar type = dt; };
+P3_DECLARE_GCTYPE_DETAIL(IS_STRING,   zend_string*,   ZVAL_STR, Z_STR_P)
+P3_DECLARE_GCTYPE_DETAIL(IS_ARRAY,    zend_array*,    ZVAL_ARR, Z_ARR_P)
+P3_DECLARE_GCTYPE_DETAIL(IS_OBJECT,   zend_object*,   ZVAL_OBJ, Z_OBJ_P)
+P3_DECLARE_GCTYPE_DETAIL(IS_RESOURCE, zend_resource*, ZVAL_RES, Z_RES_P)
+#undef P3_DECLARE_GCTYPE_DETAIL
+
+
+
+// Human Readable names to PHP Data Type map
+enum NamedType {
+  Undef = IS_UNDEF, Null = IS_NULL,
+  Bool = _IS_BOOL, True = IS_TRUE, False = IS_FALSE,
+  Long = IS_LONG, Double = IS_DOUBLE,
+  String = IS_STRING, Array = IS_ARRAY,
+  Object = IS_OBJECT, Resource = IS_RESOURCE
+};
+
 // Borrowed from FOLly https://github.com/facebook/folly
 #define P3_CREATE_HAS_MEMBER_FN_TRAITS_IMPL(classname, func_name, cv_qual) \
   template <typename TTheClass_, typename RTheReturn_, typename... TTheArgs_> \
@@ -154,22 +249,19 @@ P3_CREATE_HAS_MEMBER_FN_TRAITS(hasToString, toString);
 P3_CREATE_HAS_MEMBER_FN_TRAITS(hasToArray, toArray);
 P3_CREATE_HAS_MEMBER_FN_TRAITS(hasCompare, compare);
 
-#define P3_CREATE_CAST_WRAPPER(ptype, ctype, zwrap) \
+#define P3_CREATE_CAST_WRAPPER(ptype) \
 template<class T> typename \
-  std::enable_if<hasTo##ptype<T, ctype() const>::value, int>::type \
+  std::enable_if<hasTo##ptype<T, phpType<ptype>::type() const>::value, int>::type \
 castObjectTo##ptype(zval *src, zval *dest) { \
-  zwrap(dest, toObject<T>(src)->to##ptype()); \
+  phpType<ptype>::make(dest, toObject<T>(src)->to##ptype()); \
   return SUCCESS; \
 } \
 template<class T> typename \
-  std::enable_if<!hasTo##ptype<T, ctype() const>::value, int>::type \
+  std::enable_if<!hasTo##ptype<T, phpType<ptype>::type() const>::value, int>::type \
 castObjectTo##ptype(zval *src, zval *dest) { return FAILURE; }
 
-P3_CREATE_CAST_WRAPPER(Bool, bool, ZVAL_BOOL)
-P3_CREATE_CAST_WRAPPER(Long, zend_long, ZVAL_LONG)
-P3_CREATE_CAST_WRAPPER(Double, double, ZVAL_DOUBLE)
-P3_CREATE_CAST_WRAPPER(String, zend_string*, ZVAL_STR)
-P3_CREATE_CAST_WRAPPER(Array, zend_array*, ZVAL_ARR)
+#define P3_CASTABLE_TYPES(X) X(Bool) X(Long) X(Double) X(String) X(Array)
+P3_CASTABLE_TYPES(P3_CREATE_CAST_WRAPPER)
 
 template<class T> typename
   std::enable_if<hasCompare<T, int() const>::value, int>::type \
@@ -183,28 +275,49 @@ compareObjectToNull(zval *ret, T *a) {
   return FAILURE;
 }
 
-#define P3_CREATE_COMPARE_WRAPPER(ptype, ctype) \
+template<class T> typename
+  std::enable_if<hasCompare<T, int(const T&) const>::value,
+int>::type compareObjectToSimilar(zval *ret, const T *a, const T &b) {
+  ZVAL_LONG(ret, a->compare(b));
+  return SUCCESS;
+}
+
+template<class T> typename
+  std::enable_if<!hasCompare<T, int(const T&) const>::value,
+int>::type compareObjectToSimilar(zval *ret, const T *a, const T &b) {
+  return FAILURE;
+}
+
+template<class T> typename
+  std::enable_if<hasCompare<T, int(const zval*) const>::value,
+int>::type compareObjectToZval(zval *ret, const T *a, const zval *b) {
+  ZVAL_LONG(ret, a->compare(b));
+  return SUCCESS;
+}
+
+template<class T> typename
+  std::enable_if<!hasCompare<T, int(const zval*) const>::value,
+int>::type compareObjectToZval(zval *ret, const T *a, const zval *b) {
+  return FAILURE;
+}
+
+#define P3_CREATE_COMPARE_WRAPPER(ptype) \
 template<class T> typename \
-  std::enable_if<hasCompare<T, int(ctype) const>::value, int>::type \
-compareObjectTo##ptype(zval *ret, const T *a, ctype b) { \
+  std::enable_if<hasCompare<T, int(phpType<ptype>::const_type) const>::value, \
+int>::type compareObjectTo##ptype(zval *ret, const T *a, \
+                                  phpType<ptype>::const_type b) { \
   ZVAL_LONG(ret, a->compare(b)); \
   return SUCCESS; \
 } \
 template<class T> typename \
-  std::enable_if<!hasCompare<T, int(ctype) const>::value, int>::type \
-compareObjectTo##ptype(zval *ret, const T *a, ctype b) { \
+  std::enable_if<!hasCompare<T, int(phpType<ptype>::const_type) const>::value,\
+int>::type compareObjectTo##ptype(zval *ret, const T *a, \
+                                  phpType<ptype>::const_type b) { \
   return FAILURE; \
 }
 
-P3_CREATE_COMPARE_WRAPPER(Bool, bool)
-P3_CREATE_COMPARE_WRAPPER(Long, zend_long)
-P3_CREATE_COMPARE_WRAPPER(Double, double)
-P3_CREATE_COMPARE_WRAPPER(String, const zend_string*)
-P3_CREATE_COMPARE_WRAPPER(Array, const zend_array*)
-P3_CREATE_COMPARE_WRAPPER(Object, const zend_object*)
-P3_CREATE_COMPARE_WRAPPER(Similar, const T&)
-P3_CREATE_COMPARE_WRAPPER(Resource, const zend_resource*)
-P3_CREATE_COMPARE_WRAPPER(Zval, const zval*)
+#define P3_COMPARABLE_TYPES(X) P3_CASTABLE_TYPES(X) X(Object) X(Resource)
+P3_COMPARABLE_TYPES(P3_CREATE_COMPARE_WRAPPER)
 
 #undef P3_CREATE_COMPARE_WRAPPER
 #undef P3_CREATE_CAST_WRAPPER
@@ -281,41 +394,28 @@ int compareObject(zval *rv, zval *a, zval *b) {
     }
     return ret;
   }
+
   auto obj = toObject<T>(a);
+  if ((Z_TYPE_P(b) == IS_OBJECT) &&
+      (Z_OBJ_P(b)->handlers == &T::handlers) &&
+      (detail::compareObjectToSimilar<T>(rv, obj, *toObject<T>(b)) ==
+                                                               SUCCESS)) {
+    // Special case for comparing similar objects
+    return SUCCESS;
+  }
+
   int ret = FAILURE;
   switch (Z_TYPE_P(b)) {
     case IS_UNDEF:
     case IS_NULL:
       ret = detail::compareObjectToNull<T>(rv, obj);
       break;
-    case IS_TRUE:
-      ret = detail::compareObjectToBool<T>(rv, obj, true);
-      break;
-    case IS_FALSE:
-      ret = detail::compareObjectToBool<T>(rv, obj, false);
-      break;
-    case IS_LONG:
-      ret = detail::compareObjectToLong<T>(rv, obj, Z_LVAL_P(b));
-      break;
-    case IS_DOUBLE:
-      ret = detail::compareObjectToDouble<T>(rv, obj, Z_DVAL_P(b));
-      break;
-    case IS_STRING:
-      ret = detail::compareObjectToString<T>(rv, obj, Z_STR_P(b));
-      break;
-    case IS_ARRAY:
-      ret = detail::compareObjectToArray<T>(rv, obj, Z_ARR_P(b));
-      break;
-    case IS_OBJECT:
-      if (Z_OBJ_P(b)->handlers == &T::handlers) {
-        ret = detail::compareObjectToSimilar<T>(rv, obj, *toObject<T>(b));
-      } else {
-        ret = detail::compareObjectToObject<T>(rv, obj, Z_OBJ_P(b));
-      }
-      break;
-    case IS_RESOURCE:
-      ret = detail::compareObjectToResource<T>(rv, obj, Z_RES_P(b));
-      break;
+#define P3_COMPARE_T(ptype) \
+    case detail::ptype: \
+      ret = detail::compareObjectTo##ptype<T>(rv, obj, \
+        detail::phpType<detail::ptype>::get(b)); break;
+P3_COMPARABLE_TYPES(P3_COMPARE_T)
+#undef P3_COMPARE_T
   }
   if (ret == FAILURE) {
     ret = detail::compareObjectToZval<T>(rv, obj, b);
@@ -375,5 +475,7 @@ zend_class_entry* initClassEntry(
   return pce;
 }
 
+#undef P3_CASTABLE_TYPES
+#undef P3_COMPARABLE_TYPES
 } // namespace p3
 #endif
