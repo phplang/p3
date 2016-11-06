@@ -122,7 +122,7 @@ T* toObject(zval *obj) {
 
 /////////////////////////////////////////////////////////////////////////////
 
-namespace detail {
+namespace {
 template<zend_uchar> struct phpType {};
 template<typename> struct cppType {};
 template<> struct phpType<IS_UNDEF> {
@@ -323,7 +323,7 @@ P3_COMPARABLE_TYPES(P3_CREATE_COMPARE_WRAPPER)
 #undef P3_CREATE_CAST_WRAPPER
 #undef P3_CREATE_HAS_MEMBER_FN_TRAITS
 #undef P3_CREATE_HAS_MEMBER_FN_TRAITS_IMPL
-} // namespace detail
+} // null namespace
 
 /////////////////////////////////////////////////////////////////////////////
 
@@ -367,11 +367,11 @@ int castObject(zval *src, zval *dest, int type) {
   switch (type) {
     case IS_UNDEF:  ZVAL_UNDEF(dest); return SUCCESS;
     case IS_NULL:   ZVAL_NULL(dest);  return SUCCESS;
-    case _IS_BOOL:  return detail::castObjectToBool<T>(src, dest);
-    case IS_LONG:   return detail::castObjectToLong<T>(src, dest);
-    case IS_DOUBLE: return detail::castObjectToDouble<T>(src, dest);
-    case IS_STRING: return detail::castObjectToString<T>(src, dest);
-    case IS_ARRAY:  return detail::castObjectToArray<T>(src, dest);
+    case _IS_BOOL:  return castObjectToBool<T>(src, dest);
+    case IS_LONG:   return castObjectToLong<T>(src, dest);
+    case IS_DOUBLE: return castObjectToDouble<T>(src, dest);
+    case IS_STRING: return castObjectToString<T>(src, dest);
+    case IS_ARRAY:  return castObjectToArray<T>(src, dest);
     case IS_OBJECT: ZVAL_ZVAL(dest, src, 1, 0); return SUCCESS;
     case IS_RESOURCE:
     default:
@@ -398,8 +398,7 @@ int compareObject(zval *rv, zval *a, zval *b) {
   auto obj = toObject<T>(a);
   if ((Z_TYPE_P(b) == IS_OBJECT) &&
       (Z_OBJ_P(b)->handlers == &T::handlers) &&
-      (detail::compareObjectToSimilar<T>(rv, obj, *toObject<T>(b)) ==
-                                                               SUCCESS)) {
+      (compareObjectToSimilar<T>(rv, obj, *toObject<T>(b)) == SUCCESS)) {
     // Special case for comparing similar objects
     return SUCCESS;
   }
@@ -408,17 +407,16 @@ int compareObject(zval *rv, zval *a, zval *b) {
   switch (Z_TYPE_P(b)) {
     case IS_UNDEF:
     case IS_NULL:
-      ret = detail::compareObjectToNull<T>(rv, obj);
+      ret = compareObjectToNull<T>(rv, obj);
       break;
 #define P3_COMPARE_T(ptype) \
-    case detail::ptype: \
-      ret = detail::compareObjectTo##ptype<T>(rv, obj, \
-        detail::phpType<detail::ptype>::get(b)); break;
+    case ptype: \
+      ret = compareObjectTo##ptype<T>(rv, obj, phpType<ptype>::get(b)); break;
 P3_COMPARABLE_TYPES(P3_COMPARE_T)
 #undef P3_COMPARE_T
   }
   if (ret == FAILURE) {
-    ret = detail::compareObjectToZval<T>(rv, obj, b);
+    ret = compareObjectToZval<T>(rv, obj, b);
   }
   if (ret == FAILURE) {
     // ZE will crash if rv isn't initialized, even in FAILURE mode
