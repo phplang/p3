@@ -40,9 +40,10 @@ class MyFile {
     close();
   }
 
-  // Only strictly required element on the class
-  // This memeber must exist, and of course
-  // its matching implementation in a source file.
+  // Only strictly required elements on the class
+  // These memebers must exist, and of course
+  // the matching implementation in a source file.
+  static zend_class_entry* class_entry;
   static zend_object_handlers handlers;
 
   // Class methods may be stand-alone PHP_METHOD()s
@@ -120,7 +121,7 @@ class MyFile {
  private:
   int fd{-1};
 };
-zend_class_entry *php_myfile_ce;
+zend_class_entry *MyFile::class_entry;
 zend_object_handlers MyFile::handlers;
 
 /* {{{ proto string MyFile::read(int maxlen) */
@@ -179,7 +180,7 @@ static zend_function_entry php_myfile_methods[] = {
 
 /* {{{ PHP_MINI_FUNCTION */
 static PHP_MINIT_FUNCTION(myfile) {
-  php_myfile_ce = p3::initClassEntry<MyFile>(
+  p3::initClassEntry<MyFile>(
     "MyFile", // PHP visible classname
     php_myfile_methods // User callable methods
   );

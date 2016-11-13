@@ -9,6 +9,7 @@
  *      Foo(const Foo&) {} // clone
  *      ~Foo() {} // destruct
  *
+ *      static zend_class_entry *class_entry;
  *      static zend_object_handlers handlers;
  *    private:
  *     Bar m_data;
@@ -18,7 +19,7 @@
  *  by invoking p3::initClassEntry() from MINIT
  *
  *  PHP_MINIT_FUNCTION(myext) {
- *    php_myext_ce = p3::initClassEntry<Foo>("Foo", foo_methods);
+ *    p3::initClassEntry<Foo>("Foo", foo_methods);
  *    return SUCCESS;
  *  }
  *
@@ -379,12 +380,10 @@ int castObject(zval *src, zval *dest, int type) {
   }
 }
 
-// In theory, handlers are as unique as class entry
-// Let's hope that assumption holds.
-// Otherwise we might have to store T::class_entry
 template<class T>
 int compareObject(zval *rv, zval *a, zval *b) {
-  if ((Z_TYPE_P(a) != IS_OBJECT) || (Z_OBJ_P(a)->handlers != &T::handlers)) {
+  if ((Z_TYPE_P(a) != IS_OBJECT) ||
+     !instanceof_function(Z_OBJCE_P(a), T::class_entry)) {
     // Invert if needed so that 'a' is always a T
     ZEND_ASSERT(Z_TYPE_P(b) == IS_OBJECT);
     ZEND_ASSERT(Z_OBJ_P(b)->handlers == &T::handlers);
@@ -457,8 +456,8 @@ zend_class_entry* initClassEntry(
 
   zend_class_entry ce;
   INIT_CLASS_ENTRY_EX(ce, name, strlen(name), methods);
-  auto pce = zend_register_internal_class(&ce);
-  pce->create_object = std::is_constructible<T>::value
+  T::class_entry = zend_register_internal_class(&ce);
+  T::class_entry->create_object = std::is_constructible<T>::value
     ? createObject<T> : createThrownObject<T>;
 
   memcpy(&T::handlers, zend_get_std_object_handlers(),
@@ -470,8 +469,10 @@ zend_class_entry* initClassEntry(
   T::handlers.cast_object = castObject<T>;
   T::handlers.compare = compareObject<T>;
 
-  return pce;
+  return T::class_entry;
 }
+
+/////////////////////////////////////////////////////////////////////////////
 
 #undef P3_CASTABLE_TYPES
 #undef P3_COMPARABLE_TYPES

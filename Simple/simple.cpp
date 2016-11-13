@@ -12,6 +12,7 @@ struct Simple {
     RETURN_LONG(++counter);
   }
 
+  static zend_class_entry *class_entry;
   static zend_object_handlers handlers;
 
   bool toBool() const { return counter; }
@@ -32,7 +33,7 @@ struct Simple {
  private:
   zend_long counter{0};
 };
-zend_class_entry *php_simple_ce;
+zend_class_entry *Simple::class_entry;
 zend_object_handlers Simple::handlers;
 
 static zend_function_entry php_simple_methods[] = {
@@ -41,7 +42,7 @@ static zend_function_entry php_simple_methods[] = {
 };
 
 static PHP_MINIT_FUNCTION(simple) {
-  php_simple_ce = p3::initClassEntry<Simple>("Simple", php_simple_methods);
+  p3::initClassEntry<Simple>("Simple", php_simple_methods);
   return SUCCESS;
 }
 
