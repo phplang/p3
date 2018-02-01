@@ -26,7 +26,7 @@
  *  PHP casts will be mapped to conversion methods on the object, if they exist.
  *  Implement as many (or as few) as make sense for your class.
  *    (null)$foo - No proto required, just returns NULL
- *    (bool)$foo - bool toBool() const;
+ *    (bool)$foo - zend_bool toBool() const;
  *    (int)$foo - zend_long toLong() const;
  *    (float)$foo - double toDouble() const;
  *    (string)$foo - zend_string* toString() const;
